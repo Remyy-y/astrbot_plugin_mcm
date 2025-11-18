@@ -1,6 +1,6 @@
 name: astrbot_plugin_mcm
 display_name: 基于rcon的mc管理插件
-desc: 通过rcon像mc控制台发出指令
+desc: 通过rcon向mc控制台发出指令
 version: v1.1.1
 author: Remyy
 repo: https://github.com/Remyy-y/astrbot_plugin_mcm
