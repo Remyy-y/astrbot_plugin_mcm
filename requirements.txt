@@ -1,1 +1,1 @@
-aiomcrcon
+aio-mc-rcon
