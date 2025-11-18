@@ -1,8 +1,6 @@
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
-
-# 导入 aio-mc-rcon 库 (虽然包名叫 aio-mc-rcon，但导入名是 aiomcrcon)
 import aiomcrcon
 
 @register("mc_rcon", "Remyy", "一个通过 RCON 管理 MC 服务器的插件", "1.0.1", "https://github.com/Remyy-y/astrbot_plugin_mcm")
@@ -12,21 +10,26 @@ class MCRconPlugin(Star):
         self.config = config
         logger.info("MC RCON 插件已加载！")
 
-    # 注意这里：改成了 *args，这样就能接收 "forge", "tps" 等多个部分了
+    # 【修改】去掉了 *args，避免触发框架报错
     @filter.command("mc-command", alias={'mc'})
-    async def handle_mc_command(self, event: AstrMessageEvent, *args):
+    async def handle_mc_command(self, event: AstrMessageEvent):
         host = self.config.get("host", "127.0.0.1")
         port = self.config.get("port", 25575)
         password = self.config.get("password", "")
 
-        # 将参数重新拼接成一个字符串，中间用空格隔开
-        # 比如用户发 /mc forge tps，args 就是 ('forge', 'tps')
-        # 拼接后变成 "forge tps"
-        command = " ".join(args)
-
-        if not command:
-            yield event.plain_result("请输入要执行的命令，例如：/mc list")
+        # 【修改】手动解析参数
+        # event.message_str 是用户的完整消息，比如 "mc forge tps" 或 "/mc list"
+        raw_message = event.message_str.strip()
+        
+        # 我们按空格切割一次
+        # parts[0] 是指令头（如 "mc"），parts[1] 是剩下的所有内容（如 "forge tps"）
+        parts = raw_message.split(maxsplit=1)
+        
+        if len(parts) < 2:
+            yield event.plain_result("请输入具体的指令，例如：/mc list")
             return
+            
+        command = parts[1] # 这就是我们要发送给服务器的完整指令
 
         if not password:
             yield event.plain_result("错误：RCON 密码未配置！")
@@ -43,9 +46,7 @@ class MCRconPlugin(Star):
             
             await client.close()
             
-            # 【新功能】处理返回值
-            # 有时候库会返回 ('结果文本', 12345) 这样的元组
-            # 我们只需要第一部分
+            # 处理返回值
             if isinstance(response, tuple):
                 response_text = response[0]
             else:

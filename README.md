@@ -1,9 +1,2 @@
-# helloworld
-
-AstrBot 插件模板
-
-A template plugin for AstrBot plugin feature
-
-# 支持
-
-[帮助文档](https://astrbot.app)
+mc [指令]
+比如对着机器人发送mc op yyy就是在控制台发送/op yyy
