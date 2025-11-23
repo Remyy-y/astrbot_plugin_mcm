@@ -1,4 +1,4 @@
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 import astrbot.api.message_components as Comp
@@ -6,7 +6,7 @@ import aiomcrcon
 import asyncio # 引入 asyncio 用于延时
 import time
 
-@register("mc_rcon", "Remyy", "一个通过 RCON 管理 MC 服务器的插件", "1.3.0", "https://github.com/Remyy-y/astrbot_plugin_mcm")
+@register("mc_rcon", "Remyy", "一个通过 RCON 管理 MC 服务器的插件", "1.3.1", "https://github.com/Remyy-y/astrbot_plugin_mcm")
 class MCRconPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -101,51 +101,57 @@ class MCRconPlugin(Star):
                     pass
 
     async def check_server_startup(self, event: AstrMessageEvent, host, port, password):
-        """后台任务：轮询 RCON 直到连接成功，模拟 'Done' 监听"""
+        """后台任务：轮询 RCON 直到连接成功"""
         logger.info("开始检测服务器启动状态...")
         
         # 给服务器一点时间完全关闭 (避免连上旧的进程)
-        await asyncio.sleep(20) 
+        await asyncio.sleep(15) 
         
         start_wait_time = time.time()
         max_retries = 60 # 最多尝试 60 次
         retry_interval = 5 # 每次间隔 5 秒
-        # 总共等待 5分钟
 
         for i in range(max_retries):
             client = None
+            success = False
             try:
                 # 尝试连接
                 client = aiomcrcon.Client(host, port, password)
                 await client.connect()
-                
                 # 如果能连上，说明 Done 了！
                 await client.close()
-                
-                elapsed = int(time.time() - start_wait_time)
-                logger.info(f"服务器重启检测成功，耗时 {elapsed}s")
-                
-                # 发送群消息通知
-                chain = [
-                    Comp.Plain(f"✅ 服务器重启成功！\n"),
-                    Comp.Plain(f"⏱️ 启动耗时: 约 {elapsed} 秒\n"),
-                    Comp.Plain(f"可以在线了！")
-                ]
-                await self.context.send_message(event.unified_msg_origin, chain)
-                return
-
+                success = True
             except Exception:
                 # 连接失败，说明还没启动好
-                if i % 2 == 0: # 减少日志刷屏
+                if i % 2 == 0:
                     logger.debug(f"服务器尚未启动，{retry_interval}秒后重试...")
-                
                 if client:
                     try:
                         await client.close()
                     except:
                         pass
-                
                 await asyncio.sleep(retry_interval)
+            
+            # 如果连接成功，跳出循环进行发送，不再受外层 try-except 干扰
+            if success:
+                elapsed = int(time.time() - start_wait_time)
+                logger.info(f"服务器重启检测成功，耗时 {elapsed}s")
+                
+                try:
+                    # 构建消息链 (修复：使用 MessageChain 而不是 list)
+                    chain = MessageChain() \
+                        .plain(f"✅ 服务器重启成功！\n") \
+                        .plain(f"⏱️ 启动耗时: 约 {elapsed} 秒\n") \
+                        .plain(f"可以在线了！")
+                    
+                    await self.context.send_message(event.unified_msg_origin, chain)
+                except Exception as e:
+                    logger.error(f"发送重启通知失败: {e}")
+                
+                return # 无论发送是否成功，只要连上了服务器，就必须退出任务
         
         # 超时处理
-        await self.context.send_message(event.unified_msg_origin, Comp.Plain("⚠️ 服务器重启检测超时（5分钟），请检查后台状态。"))
+        try:
+            await self.context.send_message(event.unified_msg_origin, MessageChain().plain("⚠️ 服务器重启检测超时（5分钟），请检查后台状态。"))
+        except:
+            pass
