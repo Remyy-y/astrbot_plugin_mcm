@@ -6,7 +6,7 @@ import aiomcrcon
 import asyncio # 引入 asyncio 用于延时
 import time
 
-@register("mc_rcon", "Remyy", "一个通过 RCON 管理 MC 服务器的插件", "1.3.1", "https://github.com/Remyy-y/astrbot_plugin_mcm")
+@register("mc_rcon", "Remyy", "一个通过 RCON 管理 MC 服务器的插件", "1.3.2", "https://github.com/Remyy-y/astrbot_plugin_mcm")
 class MCRconPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -138,11 +138,11 @@ class MCRconPlugin(Star):
                 logger.info(f"服务器重启检测成功，耗时 {elapsed}s")
                 
                 try:
-                    # 构建消息链 (修复：使用 MessageChain 而不是 list)
+                    # 构建消息链 (修复：使用 .message() 而不是 .plain())
                     chain = MessageChain() \
-                        .plain(f"✅ 服务器重启成功！\n") \
-                        .plain(f"⏱️ 启动耗时: 约 {elapsed} 秒\n") \
-                        .plain(f"可以在线了！")
+                        .message(f"✅ 服务器重启成功！\n") \
+                        .message(f"⏱️ 启动耗时: 约 {elapsed} 秒\n") \
+                        .message(f"可以在线了！")
                     
                     await self.context.send_message(event.unified_msg_origin, chain)
                 except Exception as e:
@@ -152,6 +152,6 @@ class MCRconPlugin(Star):
         
         # 超时处理
         try:
-            await self.context.send_message(event.unified_msg_origin, MessageChain().plain("⚠️ 服务器重启检测超时（5分钟），请检查后台状态。"))
+            await self.context.send_message(event.unified_msg_origin, MessageChain().message("⚠️ 服务器重启检测超时（5分钟），请检查后台状态。"))
         except:
             pass
