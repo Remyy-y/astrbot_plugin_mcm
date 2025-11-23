@@ -105,7 +105,7 @@ class MCRconPlugin(Star):
         logger.info("开始检测服务器启动状态...")
         
         # 给服务器一点时间完全关闭 (避免连上旧的进程)
-        await asyncio.sleep(15) 
+        await asyncio.sleep(20) 
         
         start_wait_time = time.time()
         max_retries = 60 # 最多尝试 60 次
