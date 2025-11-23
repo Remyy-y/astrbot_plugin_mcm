@@ -1,10 +1,12 @@
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
+import astrbot.api.message_components as Comp
 import aiomcrcon
 import asyncio # 引入 asyncio 用于延时
+import time
 
-@register("mc_rcon", "Remyy", "一个通过 RCON 管理 MC 服务器的插件", "1.2.0", "https://github.com/Remyy-y/astrbot_plugin_mcm")
+@register("mc_rcon", "Remyy", "一个通过 RCON 管理 MC 服务器的插件", "1.3.0", "https://github.com/Remyy-y/astrbot_plugin_mcm")
 class MCRconPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -24,21 +26,18 @@ class MCRconPlugin(Star):
             yield event.plain_result("请输入具体的指令，例如：/mc list")
             return
             
-        user_command = parts[1].strip() # 用户输入的指令
-        actual_command = user_command   # 实际发送给 RCON 的指令
+        user_command = parts[1].strip() 
+        actual_command = user_command   
         is_restart = False
 
         # --- 快捷指令映射 ---
-        # 1. 在线人数查询
         if user_command in ["在线", "online", "list"]:
             actual_command = "list"
         
-        # 2. 重启指令 (重启 = 发送 stop + 外部脚本循环)
         elif user_command in ["重启", "restart"]:
             is_restart = True
             actual_command = "stop"
             yield event.plain_result("收到重启指令，正在进行10秒倒计时并广播...")
-        
         # ------------------
 
         if not password:
@@ -55,50 +54,42 @@ class MCRconPlugin(Star):
             # 如果是重启，执行倒计时广播逻辑
             if is_restart:
                 # 倒计时 10 秒
-                await client.send_cmd("say §cServer is restarting in 10 seconds...")
-                await asyncio.sleep(5)
+                for i in [10, 5, 4, 3, 2, 1]:
+                    if i == 10 or i <= 5:
+                        await client.send_cmd(f"say §cServer restarting in {i}s...")
+                        await asyncio.sleep(1 if i <= 5 else 5)
                 
-                await client.send_cmd("say §cServer is restarting in 5 seconds...")
-                await asyncio.sleep(2)
-                
-                await client.send_cmd("say §c3...")
-                await asyncio.sleep(1)
-                
-                await client.send_cmd("say §c2...")
-                await asyncio.sleep(1)
-                
-                await client.send_cmd("say §c1...")
-                await asyncio.sleep(1)
-                
-                # 保存数据
                 await client.send_cmd("save-all")
                 await asyncio.sleep(1) 
 
-            # 发送实际命令 (list, stop, 或其他原版指令)
+            # 发送实际命令
             response = await client.send_cmd(actual_command)
-            
             await client.close()
             
-            # 处理返回值
-            if isinstance(response, tuple):
-                response_text = response[0]
+            # 如果是重启指令，启动后台检测任务
+            if is_restart:
+                yield event.plain_result("服务器正在重启，请稍候... (Bot将自动检测上线状态)")
+                # 创建后台任务检测上线，不阻塞当前消息处理
+                asyncio.create_task(self.check_server_startup(event, host, port, password))
             else:
-                response_text = response
-
-            if response_text:
-                # 为了防止 list 显示太长，可以简单处理一下，这里直接返回
-                yield event.plain_result(f"服务器响应:\n{response_text}")
-            else:
-                # 如果是 stop 指令，通常没有响应或连接直接断开
-                if is_restart or actual_command == "stop":
-                    yield event.plain_result(f"指令 '{actual_command}' 已发送，服务器正在关闭/重启。")
+                # 普通指令处理
+                if isinstance(response, tuple):
+                    response_text = response[0]
                 else:
-                    yield event.plain_result(f"命令 '{actual_command}' 已执行（服务器无文本响应）。")
+                    response_text = response
+
+                if response_text:
+                    yield event.plain_result(f"服务器响应:\n{response_text}")
+                else:
+                    yield event.plain_result(f"命令 '{actual_command}' 已执行。")
 
         except Exception as e:
-            # 如果发送 stop 后服务器立刻关闭，可能会导致连接重置错误，这是正常的
+            # 忽略重启时的连接断开错误
             if (is_restart or actual_command == "stop") and ("Connection reset" in str(e) or "closed" in str(e)):
-                yield event.plain_result("指令已发送，服务器连接已断开（这是正常的重启现象）。")
+                # 虽然报错了，但极有可能是因为服务器关闭了连接，所以也启动检测
+                if is_restart:
+                    asyncio.create_task(self.check_server_startup(event, host, port, password))
+                yield event.plain_result("指令已发送，服务器连接已断开（正在重启中）。")
             else:
                 logger.error(f"RCON 错误: {e}")
                 yield event.plain_result(f"RCON 执行出错: {e}")
@@ -108,3 +99,53 @@ class MCRconPlugin(Star):
                     await client.close()
                 except:
                     pass
+
+    async def check_server_startup(self, event: AstrMessageEvent, host, port, password):
+        """后台任务：轮询 RCON 直到连接成功，模拟 'Done' 监听"""
+        logger.info("开始检测服务器启动状态...")
+        
+        # 给服务器一点时间完全关闭 (避免连上旧的进程)
+        await asyncio.sleep(15) 
+        
+        start_wait_time = time.time()
+        max_retries = 60 # 最多尝试 60 次
+        retry_interval = 5 # 每次间隔 5 秒
+        # 总共等待 5分钟
+
+        for i in range(max_retries):
+            client = None
+            try:
+                # 尝试连接
+                client = aiomcrcon.Client(host, port, password)
+                await client.connect()
+                
+                # 如果能连上，说明 Done 了！
+                await client.close()
+                
+                elapsed = int(time.time() - start_wait_time)
+                logger.info(f"服务器重启检测成功，耗时 {elapsed}s")
+                
+                # 发送群消息通知
+                chain = [
+                    Comp.Plain(f"✅ 服务器重启成功！\n"),
+                    Comp.Plain(f"⏱️ 启动耗时: 约 {elapsed} 秒\n"),
+                    Comp.Plain(f"可以在线了！")
+                ]
+                await self.context.send_message(event.unified_msg_origin, chain)
+                return
+
+            except Exception:
+                # 连接失败，说明还没启动好
+                if i % 2 == 0: # 减少日志刷屏
+                    logger.debug(f"服务器尚未启动，{retry_interval}秒后重试...")
+                
+                if client:
+                    try:
+                        await client.close()
+                    except:
+                        pass
+                
+                await asyncio.sleep(retry_interval)
+        
+        # 超时处理
+        await self.context.send_message(event.unified_msg_origin, Comp.Plain("⚠️ 服务器重启检测超时（5分钟），请检查后台状态。"))
