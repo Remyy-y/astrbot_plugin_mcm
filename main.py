@@ -1,46 +1,90 @@
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
+import astrbot.api.message_components as Comp
 import aiomcrcon
 import asyncio 
 import time
 
-@register("mc_rcon", "Remyy", "一个通过 RCON 管理 MC 服务器的插件", "1.4.0", "https://github.com/Remyy-y/astrbot_plugin_mcm")
+@register("mc_rcon", "Remyy", "支持多服务器管理的 RCON 插件", "1.5.0", "https://github.com/Remyy-y/astrbot_plugin_mcm")
 class MCRconPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        logger.info("MC RCON 插件已加载！")
+        logger.info("MC RCON 多服插件已加载！")
 
     @filter.command("mc-command", alias={'mc'})
     async def handle_mc_command(self, event: AstrMessageEvent):
-        host = self.config.get("host", "127.0.0.1")
-        port = self.config.get("port", 25575)
-        password = self.config.get("password", "")
-
-        raw_message = event.message_str.strip()
-        parts = raw_message.split(maxsplit=1)
+        # 获取配置中的服务器列表
+        servers_config = self.config.get("servers", [])
         
-        if len(parts) < 2:
-            yield event.plain_result("请输入具体的指令，例如：/mc list")
+        if not servers_config:
+            yield event.plain_result("❌ 错误：插件未配置任何服务器！请前往设置页面添加服务器。")
             return
-            
-        user_command = parts[1].strip() 
+
+        # 解析用户指令
+        raw_message = event.message_str.strip()
+        # 我们这里 maxsplit=2，分成：[指令头, 服务器名, 具体指令]
+        # 例如: "/mc sky restart" -> ["/mc", "sky", "restart"]
+        parts = raw_message.split(maxsplit=2)
+        
+        # --- 帮助与列表逻辑 ---
+        if len(parts) < 2:
+            # 用户只输入了 /mc
+            server_names = [s.get('name', '未命名') for s in servers_config]
+            help_msg = (
+                "指令格式错误。请使用：\n"
+                "/mc <服务器名> <指令>\n\n"
+                "当前可用服务器:\n" + "、".join(server_names)
+            )
+            yield event.plain_result(help_msg)
+            return
+
+        target_name = parts[1] # 获取目标服务器名称 (如 sky)
+
+        # 特殊指令：/mc servers 查看列表
+        if target_name == "servers":
+            server_list_str = "\n".join([f"- {s.get('name')} ({s.get('host')}:{s.get('port')})" for s in servers_config])
+            yield event.plain_result(f"已配置的服务器列表：\n{server_list_str}")
+            return
+
+        # 检查是否缺少具体指令 (如用户只输入了 /mc sky)
+        if len(parts) < 3:
+            yield event.plain_result(f"请输入要对 '{target_name}' 执行的具体指令，例如：/mc {target_name} list")
+            return
+
+        user_command = parts[2].strip() # 实际指令部分 (如 restart 或 list)
+        
+        # --- 查找对应的服务器配置 ---
+        target_server = None
+        for s in servers_config:
+            if s.get("name") == target_name:
+                target_server = s
+                break
+        
+        if not target_server:
+            yield event.plain_result(f"❌ 找不到名为 '{target_name}' 的服务器配置。")
+            return
+
+        # 提取连接信息
+        host = target_server.get("host")
+        port = target_server.get("port", 25575)
+        password = target_server.get("password")
+
+        if not password:
+            yield event.plain_result(f"❌ 服务器 '{target_name}' 未配置 RCON 密码！")
+            return
+
+        # --- 以下逻辑复用之前的重启/指令处理 (已适配新变量) ---
         actual_command = user_command   
         is_restart = False
 
-        # --- 快捷指令映射 ---
+        # 快捷指令映射
         if user_command in ["在线", "online", "list"]:
             actual_command = "list"
-        
         elif user_command in ["重启", "restart"]:
             is_restart = True
             actual_command = "stop"
-        # ------------------
-
-        if not password:
-            yield event.plain_result("错误：RCON 密码未配置！")
-            return
 
         client = None
         try:
@@ -48,12 +92,11 @@ class MCRconPlugin(Star):
             client = aiomcrcon.Client(host, port, password)
             await client.connect()
             
-            # 2. 如果是重启，先执行关闭流程
+            # 2. 重启逻辑
             if is_restart:
-                logger.info(f"执行重启流程: {host}:{port}")
+                logger.info(f"[{target_name}] 执行重启流程: {host}:{port}")
                 
-                # 为了节省时间，防止超过QQ回复超时限制，我们缩短倒计时
-                # 如果需要更长的倒计时，请自行增加，但风险是QQ可能会报超时
+                # 倒计时广播
                 await client.send_cmd("say §cServer is restarting in 3 seconds...")
                 await asyncio.sleep(1)
                 await client.send_cmd("say §c2...")
@@ -64,48 +107,40 @@ class MCRconPlugin(Star):
                 await client.send_cmd("save-all")
                 await client.send_cmd("stop") # 发送关闭指令
                 
-                await client.close() # 这里的连接肯定会断开
+                await client.close()
                 client = None
 
-                # 发送第一条消息，告诉用户正在处理
-                # 这一步非常重要，防止平台认为机器人无响应
-                yield event.plain_result("⏳ 指令已发送，正在等待服务器重启...\n(Bot 将保持此会话并在启动完成后通知您)")
+                # 告知用户并保持会话
+                yield event.plain_result(f"⏳ [{target_name}] 正在重启...\n(Bot 将保持检测直至上线)")
 
-                # 3. 进入【阻塞式】轮询检测
-                # 我们直接在这里死循环等待，直到成功，而不是创建后台任务
-                # 这样我们就可以继续使用 yield event.plain_result 给用户发消息了
-                
-                # 先等待 15 秒让旧进程彻底关闭
-                await asyncio.sleep(15)
+                # 3. 阻塞检测循环
+                await asyncio.sleep(15) # 等待关闭
 
                 start_wait_time = time.time()
-                max_retries = 60 # 最多等待 5 分钟
+                max_retries = 60
                 
                 for i in range(max_retries):
-                    # 检查是否超时 (QQ 官方机器人通常有被动消息回复时限，约 2-5 分钟)
+                    # 超时检查
                     if time.time() - start_wait_time > 280:
-                        yield event.plain_result("⚠️ 等待超时：服务器启动时间过长，请手动检查。")
+                        yield event.plain_result(f"⚠️ [{target_name}] 等待超时，请手动检查。")
                         return
 
                     check_client = None
                     try:
-                        # 尝试连接
                         check_client = aiomcrcon.Client(host, port, password)
                         await check_client.connect()
-                        # 能连上，说明 Done 了
+                        # 连接成功即代表启动完成
                         await check_client.close()
                         
                         elapsed = int(time.time() - start_wait_time)
-                        logger.info(f"重启检测成功，耗时 {elapsed}s")
+                        logger.info(f"[{target_name}] 重启检测成功，耗时 {elapsed}s")
                         
-                        # 【关键】这里使用 yield，复用当前的回复通道
-                        yield event.plain_result(f"✅ 服务器重启成功！\n⏱️ 耗时约 {elapsed} 秒，可以在线了！")
-                        return # 结束函数
+                        yield event.plain_result(f"✅ [{target_name}] 重启成功！\n⏱️ 耗时约 {elapsed} 秒，可以在线了！")
+                        return 
                         
                     except Exception:
-                        # 连接失败，继续等待
-                        if i % 4 == 0: # 减少日志
-                            logger.info("等待服务器启动中...")
+                        if i % 4 == 0:
+                            logger.info(f"[{target_name}] 等待启动中...")
                         if check_client:
                             try:
                                 await check_client.close()
@@ -113,11 +148,11 @@ class MCRconPlugin(Star):
                                 pass
                         await asyncio.sleep(5)
                 
-                yield event.plain_result("⚠️ 检测循环结束，服务器似乎未能正常启动。")
+                yield event.plain_result(f"⚠️ [{target_name}] 检测循环结束，未能连接。")
                 return
 
             else:
-                # --- 普通指令处理逻辑 (非重启) ---
+                # 普通指令处理
                 response = await client.send_cmd(actual_command)
                 await client.close()
                 
@@ -127,24 +162,22 @@ class MCRconPlugin(Star):
                     response_text = response
 
                 if response_text:
-                    yield event.plain_result(f"服务器响应:\n{response_text}")
+                    # 在回复前加上服务器名字，区分更清晰
+                    header = f"[{target_name}] 响应:\n"
+                    yield event.plain_result(header + response_text)
                 else:
-                    yield event.plain_result(f"命令 '{actual_command}' 已执行。")
+                    yield event.plain_result(f"[{target_name}] 命令 '{actual_command}' 已执行。")
 
         except Exception as e:
-            # RCON 连接错误处理
             if client:
                 try:
                     await client.close()
                 except:
                     pass
             
-            # 忽略重启瞬间的连接重置错误
+            # 忽略重启瞬间的错误
             if is_restart and ("Connection reset" in str(e) or "closed" in str(e) or "Broken pipe" in str(e)):
-                # 这里的 catch 是为了防止 stop 指令发出时产生的报错打断流程
-                # 但现在的逻辑是先发 stop 再进循环，通常不会走到这里
-                # 除非是上面的 loop 中出了非连接性错误
                 logger.warning(f"RCON断开 (预期内): {e}")
             else:
-                logger.error(f"RCON 错误: {e}")
-                yield event.plain_result(f"执行出错: {e}")
+                logger.error(f"[{target_name}] RCON 错误: {e}")
+                yield event.plain_result(f"❌ [{target_name}] 执行出错: {e}")

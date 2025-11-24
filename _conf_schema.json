@@ -1,19 +1,40 @@
 {
-  "host": {
-    "description": "Minecraft 服务器 IP 地址",
-    "type": "string",
-    "default": "127.0.0.1",
-    "obvious_hint": true
-  },
-  "port": {
-    "description": "Minecraft 服务器 RCON 端口",
-    "type": "int",
-    "default": 25575
-  },
-  "password": {
-    "description": "Minecraft 服务器 RCON 密码",
-    "type": "string",
-    "default": "your_rcon_password",
-    "obvious_hint": true
+  "servers": {
+    "description": "服务器列表配置",
+    "type": "list",
+    "items": {
+      "type": "object",
+      "description": "单个服务器详细配置",
+      "items": {
+        "name": {
+          "type": "string",
+          "description": "服务器名称 (指令中使用的代号，如 sky)",
+          "default": "default"
+        },
+        "host": {
+          "type": "string",
+          "description": "服务器 IP 地址",
+          "default": "127.0.0.1"
+        },
+        "port": {
+          "type": "int",
+          "description": "RCON 端口",
+          "default": 25575
+        },
+        "password": {
+          "type": "string",
+          "description": "RCON 密码",
+          "default": "password"
+        }
+      }
+    },
+    "default": [
+      {
+        "name": "survival",
+        "host": "127.0.0.1",
+        "port": 25575,
+        "password": "your_password"
+      }
+    ]
   }
 }
